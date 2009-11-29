@@ -1,0 +1,211 @@
+#!/usr/bin/env python
+
+"""snaxd does 1-N broadcasting on named pipes.
+
+for a directory structure like so:
+
+inputdir/
+    resource1
+    resource2
+    resource3
+outputdir/
+    resource1/
+        foo
+        bar
+    resource2/
+        bar
+        baz
+    resource3/
+        foo
+        baz
+
+it reads data from inputdir/resource1 and sends all that data to
+outputdir/resource1/foo and outputdir/resource1/bar
+
+it allows for multiple consumers to listen to a single producer with purely
+transient data, like following logs in real-time.
+
+there are a few restrictions on the directory structure of inputdir/ and
+outputdir/:
+    - inputdir must only contain named pipes which snaxd has permission to read
+    - outputdir must be writable by snaxd
+    - consumers must create their own named pipes in outputdir/<resource>, and
+      they must be made writable by the snaxd process
+
+at any time if a new FIFO is created in inputdir, snaxd will create the
+directory in outputdir and consumers can create their FIFOs there.
+"""
+
+import collections
+import errno
+import optparse
+import os
+import shutil
+import time
+
+import greenhouse
+import greenhouse.poller
+
+
+greenhouse.poller.set(greenhouse.poller.Select())
+
+DEFAULT_INPUT_DIR = "/nail/snax/inputs"
+DEFAULT_OUTPUT_DIR = "/nail/snax/outputs"
+
+
+def update_readers(inputdir, readers, writers):
+    ondisk = set(os.listdir(inputdir))
+    gonereaders, newreaders = set(), set()
+
+    # drop registered readers that aren't there any more
+    for res in readers:
+        if res not in ondisk:
+            gonereaders.add(res)
+            readers.discard(res)
+
+            # also close and clean up after all the writers for this resource
+            writers.pop(res, None)
+
+    # add newly-appeared readers
+    for res in ondisk:
+        if res not in readers:
+            newreaders.add(res)
+            readers.add(res)
+
+            # and add a new set to the writers housekeeping
+            writers[res] = set()
+
+    return newreaders, gonereaders
+
+
+def update_writers_for_res(outputdir, writers, res):
+    ondisk = set(os.listdir(os.path.join(outputdir, res)))
+    gonewriters, newwriters = set(), set()
+
+    # drop registered writers that aren't there any more
+    for consumer in writers[res]:
+        if consumer not in ondisk:
+            gonewriters.add(consumer)
+            writers[res].discard(consumer)
+
+    # add newly-appeared consumers
+    for consumer in ondisk:
+        if consumer not in writers[res]:
+            newwriters.add(consumer)
+            writers[res].add(consumer)
+
+    return newwriters, gonewriters
+
+
+def reader_proc(inputdir, res, kill_dict, send_dict):
+    fp = greenhouse.File(os.path.join(inputdir, res))
+    send_dict[res] = {}
+
+    try:
+        while 1:
+            if kill_dict.pop(res, None):
+                break
+            data = fp.read(8192)
+            if data:
+                for consumer, deque in send_dict[res].iteritems():
+                    deque.append(data)
+            greenhouse.pause()
+    finally:
+        fp.close()
+
+
+def open_writer(path):
+    while 1:
+        try:
+            return greenhouse.File(path, 'a')
+        except (OSError, IOError), err:
+            if not err.args or err.args[0] != errno.ENXIO:
+                raise
+            greenhouse.pause()
+
+
+def writer_proc(outputdir, pair, kill_dict, send_dict):
+    res, consumer = pair
+    path = os.path.join(outputdir, res, consumer)
+    fp = open_writer(path)
+    send_dict[res][consumer] = deque = collections.deque()
+
+    try:
+        while 1:
+            if kill_dict.pop(pair, None):
+                for item in deque:
+                    fp.write(item)
+                deque.clear()
+                fp.close()
+                send_dict.get(res, {}).pop(consumer, None)
+                break
+            for item in deque:
+                fp.write(item)
+            fp.close()
+            fp = open_writer(path)
+            deque.clear()
+            greenhouse.pause()
+    finally:
+        fp.close()
+
+
+def main(options, args):
+    inputdir = os.path.abspath(options.input)
+    outputdir = os.path.abspath(options.output)
+    readers, writers = set(), {}
+    kill_readers, kill_writers = {}, {}
+    to_send = {}
+
+    while 1:
+        # update bookkeeping
+        new_w, done_w = set(), set()
+        new_r, done_r = update_readers(inputdir, readers, writers)
+
+        for r in new_r:
+            try:
+                os.mkdir(os.path.join(outputdir, r))
+            except (OSError, IOError), err:
+                if not err.args or err.args[0] != errno.EEXIST:
+                    raise
+
+        for res in readers:
+            new, done = update_writers_for_res(outputdir, writers, res)
+            new_w.update((res, w) for w in new)
+            done_w.update((res, w) for w in done)
+
+        # kill off finished coros
+        for r in done_r:
+            kill_readers[r] = True
+        for w in done_w:
+            kill_writers[w] = True
+
+        # start up new coros
+        for r in new_r:
+            greenhouse.schedule(
+                    reader_proc, args=(inputdir, r, kill_readers, to_send))
+        for w in new_w:
+            greenhouse.schedule(
+                    writer_proc, args=(outputdir, w, kill_writers, to_send))
+
+        greenhouse.pause()
+
+
+def parse_args():
+    parser = optparse.OptionParser()
+
+    parser.add_option(
+            "-i",
+            "--input",
+            default=DEFAULT_INPUT_DIR,
+            help="directory of FIFOs that receive source data")
+    parser.add_option(
+            "-o",
+            "--output",
+            default=DEFAULT_OUTPUT_DIR,
+            help="parent directory of FIFO dirs for data consumers")
+
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    main(*parse_args())
