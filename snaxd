@@ -46,8 +46,10 @@ import time
 import greenhouse
 
 
-DEFAULT_INPUT_DIR = "/nail/snax/inputs"
-DEFAULT_OUTPUT_DIR = "/nail/snax/outputs"
+DEFAULT_INPUT_DIR = os.path.join(os.path.dirname(__file__), "inputs")
+DEFAULT_INPUT_DIR = os.environ.get('SNAXINPUTS', DEFAULT_INPUT_DIR)
+DEFAULT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "outputs")
+DEFAULT_OUTPUT_DIR = os.environ.get('SNAXOUTPUTS', DEFAULT_OUTPUT_DIR)
 
 
 def update_readers(inputdir, readers, writers):
