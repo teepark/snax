@@ -44,10 +44,7 @@ import shutil
 import time
 
 import greenhouse
-import greenhouse.poller
 
-
-greenhouse.poller.set(greenhouse.poller.Select())
 
 DEFAULT_INPUT_DIR = "/nail/snax/inputs"
 DEFAULT_OUTPUT_DIR = "/nail/snax/outputs"
@@ -58,7 +55,7 @@ def update_readers(inputdir, readers, writers):
     gonereaders, newreaders = set(), set()
 
     # drop registered readers that aren't there any more
-    for res in readers:
+    for res in tuple(readers):
         if res not in ondisk:
             gonereaders.add(res)
             readers.discard(res)
@@ -103,13 +100,15 @@ def reader_proc(inputdir, res, kill_dict, send_dict):
 
     try:
         while 1:
+            greenhouse.pause_for(0.05)
             if kill_dict.pop(res, None):
                 break
             data = fp.read(8192)
+            while data and len(data) % 8192 == 0:
+                data += fp.read(8192)
             if data:
                 for consumer, deque in send_dict[res].iteritems():
                     deque.append(data)
-            greenhouse.pause()
     finally:
         fp.close()
 
@@ -121,7 +120,7 @@ def open_writer(path):
         except (OSError, IOError), err:
             if not err.args or err.args[0] != errno.ENXIO:
                 raise
-            greenhouse.pause()
+            greenhouse.pause_for(0.05)
 
 
 def writer_proc(outputdir, pair, kill_dict, send_dict):
@@ -133,20 +132,26 @@ def writer_proc(outputdir, pair, kill_dict, send_dict):
     try:
         while 1:
             if kill_dict.pop(pair, None):
-                for item in deque:
+                for item in tuple(deque):
                     fp.write(item)
                 deque.clear()
-                fp.close()
                 send_dict.get(res, {}).pop(consumer, None)
                 break
-            for item in deque:
-                fp.write(item)
-            fp.close()
-            fp = open_writer(path)
+            if deque:
+                for item in tuple(deque):
+                    fp.write(item)
+                try:
+                    fp.close()
+                except:
+                    pass
+                fp = open_writer(path)
             deque.clear()
-            greenhouse.pause()
+            greenhouse.pause_for(0.05)
     finally:
-        fp.close()
+        try:
+            fp.close()
+        except:
+            pass
 
 
 def main(options, args):
@@ -187,7 +192,7 @@ def main(options, args):
             greenhouse.schedule(
                     writer_proc, args=(outputdir, w, kill_writers, to_send))
 
-        greenhouse.pause()
+        greenhouse.pause_for(0.05)
 
 
 def parse_args():
