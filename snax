@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+
+NAME=`head -c15 /dev/urandom | base64 -w0 | sed 's/[^a-zA-Z0-9]//g'`
+[ -L "$0" ] && HERE=`readlink $0` || HERE=$0
+HERE=`dirname $HERE`
+[ "$SNAXOUTPUTS" ] && OUTPUTS=$SNAXOUTPUTS || OUTPUTS=$HERE/outputs
+
+targets=`for resource in $@; do echo $OUTPUTS/$resource/$NAME; done`
+
+cleanup() {
+    rm -f $targets
+    exit 1
+}
+trap cleanup 1 2 3 6 14 15
+
+mkfifo $targets
+tail -f $targets
