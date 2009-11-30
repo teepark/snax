@@ -66,7 +66,7 @@ def update_readers(inputdir, readers, writers):
             writers.pop(res, None)
 
     # add newly-appeared readers
-    for res in ondisk:
+    for res in tuple(ondisk):
         if res not in readers:
             newreaders.add(res)
             readers.add(res)
@@ -82,13 +82,13 @@ def update_writers_for_res(outputdir, writers, res):
     gonewriters, newwriters = set(), set()
 
     # drop registered writers that aren't there any more
-    for consumer in writers[res]:
+    for consumer in tuple(writers[res]):
         if consumer not in ondisk:
             gonewriters.add(consumer)
             writers[res].discard(consumer)
 
     # add newly-appeared consumers
-    for consumer in ondisk:
+    for consumer in tuple(ondisk):
         if consumer not in writers[res]:
             newwriters.add(consumer)
             writers[res].add(consumer)
@@ -109,7 +109,7 @@ def reader_proc(inputdir, res, kill_dict, send_dict):
             while data and len(data) % 8192 == 0:
                 data += fp.read(8192)
             if data:
-                for consumer, deque in send_dict[res].iteritems():
+                for consumer, deque in send_dict[res].items():
                     deque.append(data)
     finally:
         fp.close()
@@ -175,7 +175,7 @@ def main(options, args):
                 if not err.args or err.args[0] != errno.EEXIST:
                     raise
 
-        for res in readers:
+        for res in tuple(readers):
             new, done = update_writers_for_res(outputdir, writers, res)
             new_w.update((res, w) for w in new)
             done_w.update((res, w) for w in done)
