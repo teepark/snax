@@ -105,12 +105,14 @@ def reader_proc(inputdir, res, kill_dict, send_dict):
             greenhouse.pause_for(0.05)
             if kill_dict.pop(res, None):
                 break
-            data = fp.read(8192)
-            while data and len(data) % 8192 == 0:
-                data += fp.read(8192)
-            if data:
+            rcvd = fp.read(8192)
+            if rcvd:
+                data = [rcvd]
+                while len(rcvd) == 8192:
+                    rcvd = fp.read(8192)
+                    data.append(rcvd)
                 for consumer, deque in send_dict[res].items():
-                    deque.append(data)
+                    deque.append("".join(data))
     finally:
         fp.close()
 
