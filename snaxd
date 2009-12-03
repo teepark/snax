@@ -144,10 +144,7 @@ def writer_proc(outputdir, pair, kill_dict, send_dict):
             if deque:
                 for item in tuple(deque):
                     fp.write(item)
-                try:
-                    fp.close()
-                except:
-                    pass
+                fp.close()
                 fp = open_writer(path)
             deque.clear()
             greenhouse.pause_for(0.05)
